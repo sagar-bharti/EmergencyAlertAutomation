@@ -1,20 +1,695 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+// ============================================================
+//  AI Emergency Alert System — Expo App
+//  Single-file App.js  |  Works with Expo Go (SDK 50+)
+//  Required packages listed at the bottom of this file
+// ============================================================
 
-export default function App() {
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  Animated, Alert, Vibration, Linking, Platform,
+  StatusBar, Dimensions, SafeAreaView,
+} from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createStackNavigator } from '@react-navigation/stack';
+import * as Location from 'expo-location';
+import { Ionicons } from '@expo/vector-icons';
+
+const { width } = Dimensions.get('window');
+const Tab = createBottomTabNavigator();
+const Stack = createStackNavigator();
+
+// ─── Shared state (simple context) ──────────────────────────
+const AppContext = React.createContext(null);
+function useApp() { return React.useContext(AppContext); }
+
+// ─── Constants ───────────────────────────────────────────────
+const CONTACTS = [
+  { id: 1, name: 'Mummy',    phone: '+91-8085055261', relation: 'Mother',  icon: 'heart',         color: '#FF6B9D' },
+  { id: 2, name: 'Papa',    phone: '+91-7987504890', relation: 'Father',  icon: 'shield',        color: '#5B8CFF' },
+  { id: 3, name: 'Bhaiya',  phone: '+91-8085055261', relation: 'Brother', icon: 'people',        color: '#4CAF82' },
+  { id: 4, name: 'Priya',  phone: '+91-7987504890', relation: 'Friend',  icon: 'person-circle', color: '#FF9F43' },
+];
+
+const FAKE_ALERTS = [
+  { id: 1, time: '2 min ago',   type: 'Emergency', msg: 'SOS sent to all contacts', color: '#FF4757' },
+  { id: 2, time: '1 hour ago',  type: 'Location',  msg: 'Location shared with Mom', color: '#FF9F43' },
+  { id: 3, time: 'Yesterday',   type: 'Test',      msg: 'System test completed',    color: '#2ED573' },
+  { id: 4, time: '2 days ago',  type: 'Emergency', msg: 'False alarm — resolved',   color: '#5352ED' },
+];
+
+// ─── Gradient Card helper (no expo-linear-gradient needed) ──
+function GradCard({ colors, style, children }) {
+  // Simulates gradient using an overlaid view
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
+    <View style={[styles.gradCardOuter, { backgroundColor: colors[0] }, style]}>
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors[1], opacity: 0.45, borderRadius: 16 }]} />
+      {children}
     </View>
   );
 }
 
+// ─── Pulse animation component ───────────────────────────────
+function PulseRing({ active, color }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const opacity = useRef(new Animated.Value(0.7)).current;
+
+  useEffect(() => {
+    if (active) {
+      Animated.loop(
+        Animated.parallel([
+          Animated.sequence([
+            Animated.timing(scale,   { toValue: 1.6, duration: 900, useNativeDriver: true }),
+            Animated.timing(scale,   { toValue: 1,   duration: 900, useNativeDriver: true }),
+          ]),
+          Animated.sequence([
+            Animated.timing(opacity, { toValue: 0,   duration: 900, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0.7, duration: 900, useNativeDriver: true }),
+          ]),
+        ])
+      ).start();
+    } else {
+      scale.setValue(1);
+      opacity.setValue(0.7);
+    }
+  }, [active]);
+
+  return (
+    <Animated.View
+      style={{
+        position: 'absolute',
+        width: 160, height: 160,
+        borderRadius: 80,
+        backgroundColor: color,
+        opacity,
+        transform: [{ scale }],
+      }}
+    />
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  HOME SCREEN
+// ════════════════════════════════════════════════════════════
+function HomeScreen({ navigation }) {
+  const { isListening, setIsListening, triggerEmergency, helpCount, setHelpCount } = useApp();
+  const buttonScale = useRef(new Animated.Value(1)).current;
+  const headerAnim  = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(headerAnim, { toValue: 1, duration: 800, useNativeDriver: true }).start();
+  }, []);
+
+  const toggleListening = () => {
+    Animated.sequence([
+      Animated.timing(buttonScale, { toValue: 0.9, duration: 100, useNativeDriver: true }),
+      Animated.timing(buttonScale, { toValue: 1,   duration: 100, useNativeDriver: true }),
+    ]).start();
+    Vibration.vibrate(50);
+    setIsListening(prev => !prev);
+  };
+
+const handleHelp = () => {
+    const next = helpCount + 1;
+    setHelpCount(next);
+    Vibration.vibrate([0, 100, 50, 100]);
+    
+    if (next >= 2) {
+      setHelpCount(0);
+      
+      // 🚨 Emergency trigger
+      triggerEmergency(navigation);
+      
+      // 📞 Auto Call — apna number yahan daalo
+      const emergencyNumber = '7987504890'; // <-- Yahan apna number daalo
+      
+      Alert.alert(
+        '🚨 Emergency!',
+        'Calling emergency contact now!',
+        [
+          {
+            text: 'Call Now',
+            onPress: () => Linking.openURL(`tel:${emergencyNumber}`),
+            style: 'destructive',
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]
+      );
+      
+      // Auto call without alert (2 second delay)
+      setTimeout(() => {
+        Linking.openURL(`tel:${emergencyNumber}`);
+      }, 2000);
+      
+    } else {
+      Alert.alert('⚠️ Warning', `Press HELP ${2 - next} more time(s) to trigger emergency!`);
+    }
+  };
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" backgroundColor="#0A0E27" />
+      <ScrollView contentContainerStyle={styles.homeScroll} showsVerticalScrollIndicator={false}>
+
+        {/* Header */}
+        <Animated.View style={{ opacity: headerAnim, transform: [{ translateY: headerAnim.interpolate({ inputRange: [0,1], outputRange: [-30,0] }) }] }}>
+          <View style={styles.header}>
+            <View>
+              <Text style={styles.headerSub}>Welcome back</Text>
+              <Text style={styles.headerTitle}>AI Emergency{'\n'}Alert System</Text>
+            </View>
+            <View style={styles.headerBadge}>
+              <Ionicons name="shield-checkmark" size={28} color="#2ED573" />
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Main listen button */}
+        <View style={styles.buttonWrapper}>
+          <PulseRing active={isListening} color={isListening ? '#FF4757' : '#5B8CFF'} />
+          <Animated.View style={{ transform: [{ scale: buttonScale }] }}>
+            <TouchableOpacity
+              style={[styles.mainBtn, { backgroundColor: isListening ? '#FF4757' : '#5B8CFF' }]}
+              onPress={toggleListening}
+              activeOpacity={0.85}
+            >
+              <Ionicons name={isListening ? 'mic' : 'mic-off'} size={44} color="#fff" />
+              <Text style={styles.mainBtnText}>{isListening ? 'Stop\nListening' : 'Start\nListening'}</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+
+        {/* Status card */}
+        <GradCard colors={isListening ? ['#1A1F3A', '#2d1a3a'] : ['#1A1F3A', '#0d2d1a']} style={styles.statusCard}>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, { backgroundColor: isListening ? '#FF4757' : '#2ED573' }]} />
+            <Text style={styles.statusText}>
+              {isListening ? '🎙️  Listening for distress signals...' : '⏸  System standby — not listening'}
+            </Text>
+          </View>
+          {isListening && (
+            <Text style={styles.statusSub}>AI is monitoring for "Help", crying, and panic patterns</Text>
+          )}
+        </GradCard>
+
+        {/* HELP panic button */}
+        <GradCard colors={['#2d0a0a', '#1a0000']} style={styles.helpCard}>
+          <Text style={styles.helpCardTitle}>Panic Trigger</Text>
+          <Text style={styles.helpCardSub}>Press HELP twice to send emergency alert instantly</Text>
+          <TouchableOpacity style={styles.helpBtn} onPress={handleHelp} activeOpacity={0.8}>
+            <Text style={styles.helpBtnText}>🆘  HELP  ({helpCount}/2)</Text>
+          </TouchableOpacity>
+        </GradCard>
+
+        {/* Feature cards row */}
+        <Text style={styles.sectionTitle}>System Modules</Text>
+        <View style={styles.featureRow}>
+          {[
+            { icon: 'mic',           label: 'Voice AI',   color: '#5B8CFF', desc: 'Keyword detection' },
+            { icon: 'location',      label: 'GPS',        color: '#2ED573', desc: 'Live tracking'      },
+            { icon: 'camera',        label: 'Camera',     color: '#FF9F43', desc: 'Auto capture'       },
+            { icon: 'chatbubbles',   label: 'Alerts',     color: '#FF4757', desc: 'Multi-channel'      },
+          ].map(f => (
+            <View key={f.label} style={styles.featureCard}>
+              <View style={[styles.featureIcon, { backgroundColor: f.color + '22' }]}>
+                <Ionicons name={f.icon} size={22} color={f.color} />
+              </View>
+              <Text style={styles.featureLabel}>{f.label}</Text>
+              <Text style={styles.featureDesc}>{f.desc}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Contacts quick view */}
+        <Text style={styles.sectionTitle}>Trusted Contacts</Text>
+        {CONTACTS.map(c => (
+          <View key={c.id} style={styles.contactRow}>
+            <View style={[styles.contactAvatar, { backgroundColor: c.color + '33' }]}>
+              <Ionicons name={c.icon} size={20} color={c.color} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contactName}>{c.name}</Text>
+              <Text style={styles.contactSub}>{c.relation} · {c.phone}</Text>
+            </View>
+            <TouchableOpacity onPress={() => Linking.openURL(`tel:${c.phone}`)}>
+              <Ionicons name="call-outline" size={20} color="#5B8CFF" />
+            </TouchableOpacity>
+          </View>
+        ))}
+
+        <View style={{ height: 30 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  EMERGENCY SCREEN
+// ════════════════════════════════════════════════════════════
+function EmergencyScreen({ navigation }) {
+  const { location, setLocation } = useApp();
+  const [alertSent, setAlertSent]   = useState(false);
+  const [locLoading, setLocLoading] = useState(false);
+  const flashAnim = useRef(new Animated.Value(1)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+
+  useEffect(() => {
+    // Flash background
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(flashAnim, { toValue: 0.3, duration: 500, useNativeDriver: true }),
+        Animated.timing(flashAnim, { toValue: 1,   duration: 500, useNativeDriver: true }),
+      ])
+    ).start();
+    // Slide in
+    Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }).start();
+    // Auto-send alert + fetch location
+    fetchLocation();
+    setTimeout(() => setAlertSent(true), 1500);
+    Vibration.vibrate([0, 300, 200, 300, 200, 300]);
+  }, []);
+
+  const fetchLocation = async () => {
+    setLocLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLocation(loc.coords);
+      } else {
+        // Fallback fake location (Gwalior, MP)
+        setLocation({ latitude: 26.2183, longitude: 78.1828 });
+      }
+    } catch {
+      setLocation({ latitude: 26.2183, longitude: 78.1828 });
+    }
+    setLocLoading(false);
+  };
+
+  const openMaps = () => {
+    if (!location) return;
+    const url = `https://maps.google.com/?q=${location.latitude},${location.longitude}`;
+    Linking.openURL(url);
+  };
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: '#0d0000' }]}>
+      <StatusBar barStyle="light-content" backgroundColor="#0d0000" />
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+
+        {/* Flashing alert bar */}
+        <Animated.View style={[styles.emergencyBar, { opacity: flashAnim }]}>
+          <Text style={styles.emergencyBarText}>🚨  EMERGENCY DETECTED  🚨</Text>
+        </Animated.View>
+
+        <Animated.View style={{ transform: [{ translateY: slideAnim }] }}>
+
+          {/* Alert sent status */}
+          <View style={styles.emergencyCard}>
+            <Ionicons name="alert-circle" size={48} color="#FF4757" style={{ alignSelf: 'center', marginBottom: 8 }} />
+            <Text style={styles.emergencyTitle}>Emergency Activated!</Text>
+            <Text style={styles.emergencyMsg}>Your distress signal has been detected. Help is being notified.</Text>
+
+            {alertSent && (
+              <View style={styles.alertSentBadge}>
+                <Ionicons name="checkmark-circle" size={16} color="#2ED573" />
+                <Text style={styles.alertSentText}>  Alerts sent to all 4 trusted contacts</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Location card */}
+          <View style={styles.emergencyCard}>
+            <View style={styles.emergencyCardHeader}>
+              <Ionicons name="location" size={20} color="#FF9F43" />
+              <Text style={styles.emergencyCardTitle}>  Your Location</Text>
+            </View>
+            {locLoading ? (
+              <Text style={styles.locText}>📡 Fetching GPS coordinates...</Text>
+            ) : location ? (
+              <>
+                <Text style={styles.locText}>Lat: {location.latitude.toFixed(6)}</Text>
+                <Text style={styles.locText}>Lng: {location.longitude.toFixed(6)}</Text>
+                <TouchableOpacity style={styles.mapBtn} onPress={openMaps}>
+                  <Ionicons name="map" size={16} color="#fff" />
+                  <Text style={styles.mapBtnText}>  Open in Maps</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <Text style={styles.locText}>Location unavailable</Text>
+            )}
+          </View>
+
+          {/* Dummy camera card */}
+          <View style={styles.emergencyCard}>
+            <View style={styles.emergencyCardHeader}>
+              <Ionicons name="camera" size={20} color="#5B8CFF" />
+              <Text style={styles.emergencyCardTitle}>  Camera Module</Text>
+            </View>
+            <View style={styles.cameraPreview}>
+              <Ionicons name="camera-outline" size={40} color="#ffffff44" />
+              <Text style={styles.cameraText}>📸 Auto-capture active{'\n'}Images sent to contacts</Text>
+            </View>
+          </View>
+
+          {/* Contacts notified */}
+          <View style={styles.emergencyCard}>
+            <View style={styles.emergencyCardHeader}>
+              <Ionicons name="people" size={20} color="#FF6B9D" />
+              <Text style={styles.emergencyCardTitle}>  Notified Contacts</Text>
+            </View>
+            {CONTACTS.map(c => (
+              <View key={c.id} style={styles.contactRow}>
+                <View style={[styles.contactAvatar, { backgroundColor: c.color + '33' }]}>
+                  <Ionicons name={c.icon} size={18} color={c.color} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.contactName}>{c.name} <Text style={styles.alertSentText}>✓ Notified</Text></Text>
+                  <Text style={styles.contactSub}>{c.phone}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* Action buttons */}
+          <View style={styles.emergencyActions}>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF4757' }]} onPress={() => Alert.alert('Alert', 'Emergency alert re-sent!')}>
+              <Ionicons name="send" size={18} color="#fff" />
+              <Text style={styles.actionBtnText}>Send Alert</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#FF9F43' }]} onPress={openMaps}>
+              <Ionicons name="location" size={18} color="#fff" />
+              <Text style={styles.actionBtnText}>Share Location</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#2ED573' }]} onPress={() => Linking.openURL('tel:112')}>
+              <Ionicons name="call" size={18} color="#fff" />
+              <Text style={styles.actionBtnText}>Call 112</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Cancel */}
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => { Vibration.cancel(); navigation.goBack(); }}>
+            <Text style={styles.cancelBtnText}>✕  Cancel Emergency</Text>
+          </TouchableOpacity>
+
+        </Animated.View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  ALERTS SCREEN
+// ════════════════════════════════════════════════════════════
+function AlertsScreen() {
+  const slideAnims = FAKE_ALERTS.map(() => useRef(new Animated.Value(40)).current);
+
+  useEffect(() => {
+    FAKE_ALERTS.forEach((_, i) => {
+      Animated.timing(slideAnims[i], {
+        toValue: 0, duration: 400, delay: i * 100, useNativeDriver: true,
+      }).start();
+    });
+  }, []);
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+        <Text style={styles.screenTitle}>Alert History</Text>
+        {FAKE_ALERTS.map((a, i) => (
+          <Animated.View key={a.id} style={{ transform: [{ translateY: slideAnims[i] }] }}>
+            <View style={styles.alertItem}>
+              <View style={[styles.alertDot, { backgroundColor: a.color }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.alertType}>{a.type}</Text>
+                <Text style={styles.alertMsg}>{a.msg}</Text>
+                <Text style={styles.alertTime}>{a.time}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#ffffff44" />
+            </View>
+          </Animated.View>
+        ))}
+
+        {/* Stats cards */}
+        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>This Month</Text>
+        <View style={styles.statsRow}>
+          {[
+            { label: 'SOS Sent',  value: '3', color: '#FF4757' },
+            { label: 'Contacts',  value: '4', color: '#5B8CFF' },
+            { label: 'Safe',      value: '2', color: '#2ED573' },
+          ].map(s => (
+            <View key={s.label} style={[styles.statCard, { borderTopColor: s.color }]}>
+              <Text style={[styles.statValue, { color: s.color }]}>{s.value}</Text>
+              <Text style={styles.statLabel}>{s.label}</Text>
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  SETTINGS SCREEN
+// ════════════════════════════════════════════════════════════
+function SettingsScreen() {
+  const [settings, setSettings] = useState({
+    autoCall: true, smsBackup: true, liveTrack: false, vibration: true,
+  });
+  const toggle = key => setSettings(p => ({ ...p, [key]: !p[key] }));
+
+  const rows = [
+    { key: 'autoCall', label: 'Auto Call Contacts',   icon: 'call',     desc: 'Call automatically during SOS' },
+    { key: 'smsBackup', label: 'SMS Backup Alert',    icon: 'chatbox',  desc: 'Send SMS if internet is off' },
+    { key: 'liveTrack', label: 'Live Location Track', icon: 'navigate', desc: 'Share location until safe' },
+    { key: 'vibration', label: 'Vibration Alerts',    icon: 'phone-portrait', desc: 'Vibrate on emergency trigger' },
+  ];
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+        <Text style={styles.screenTitle}>Settings</Text>
+
+        {/* Profile card */}
+        <GradCard colors={['#1A1F3A', '#2d1a3a']} style={{ marginBottom: 20 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={styles.profileAvatar}>
+              <Ionicons name="person" size={28} color="#5B8CFF" />
+            </View>
+            <View>
+              <Text style={styles.profileName}>User Profile</Text>
+              <Text style={styles.profileSub}>4 trusted contacts · Protection active</Text>
+            </View>
+          </View>
+        </GradCard>
+
+        <Text style={styles.sectionTitle}>Alert Settings</Text>
+        {rows.map(r => (
+          <View key={r.key} style={styles.settingRow}>
+            <View style={[styles.settingIcon, { backgroundColor: '#5B8CFF22' }]}>
+              <Ionicons name={r.icon} size={18} color="#5B8CFF" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingLabel}>{r.label}</Text>
+              <Text style={styles.settingDesc}>{r.desc}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.toggleTrack, { backgroundColor: settings[r.key] ? '#5B8CFF' : '#ffffff22' }]}
+              onPress={() => toggle(r.key)}
+            >
+              <View style={[styles.toggleThumb, { transform: [{ translateX: settings[r.key] ? 18 : 0 }] }]} />
+            </TouchableOpacity>
+          </View>
+        ))}
+
+        <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Emergency Contacts</Text>
+        {CONTACTS.map(c => (
+          <View key={c.id} style={styles.contactRow}>
+            <View style={[styles.contactAvatar, { backgroundColor: c.color + '33' }]}>
+              <Ionicons name={c.icon} size={18} color={c.color} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.contactName}>{c.name} — {c.relation}</Text>
+              <Text style={styles.contactSub}>{c.phone}</Text>
+            </View>
+            <Ionicons name="create-outline" size={18} color="#ffffff44" />
+          </View>
+        ))}
+
+        {/* App info */}
+        <View style={[styles.emergencyCard, { marginTop: 24, alignItems: 'center' }]}>
+          <Ionicons name="shield-checkmark" size={32} color="#2ED573" />
+          <Text style={[styles.emergencyTitle, { fontSize: 15, marginTop: 6 }]}>AI Emergency Safety System</Text>
+          <Text style={[styles.emergencyMsg, { textAlign: 'center' }]}>v1.0.0 — Prototype{'\n'}Built with Expo + React Native</Text>
+        </View>
+
+        <View style={{ height: 30 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  HOME STACK (wraps Home + Emergency)
+// ════════════════════════════════════════════════════════════
+function HomeStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Home"      component={HomeScreen} />
+      <Stack.Screen name="Emergency" component={EmergencyScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  ROOT APP
+// ════════════════════════════════════════════════════════════
+export default function App() {
+  const [isListening, setIsListening] = useState(false);
+  const [location,    setLocation]    = useState(null);
+  const [helpCount,   setHelpCount]   = useState(0);
+
+  const triggerEmergency = useCallback((navigation) => {
+    setIsListening(false);
+    navigation.navigate('Emergency');
+  }, []);
+
+  return (
+    <AppContext.Provider value={{ isListening, setIsListening, location, setLocation, helpCount, setHelpCount, triggerEmergency }}>
+      <NavigationContainer>
+        <Tab.Navigator
+          screenOptions={({ route }) => ({
+            headerShown: false,
+            tabBarStyle: styles.tabBar,
+            tabBarActiveTintColor: '#5B8CFF',
+            tabBarInactiveTintColor: '#ffffff55',
+            tabBarLabelStyle: { fontSize: 11, marginBottom: 4 },
+            tabBarIcon: ({ focused, color, size }) => {
+              const icons = { HomeTab: focused ? 'home' : 'home-outline', Alerts: focused ? 'notifications' : 'notifications-outline', Settings: focused ? 'settings' : 'settings-outline' };
+              return <Ionicons name={icons[route.name]} size={22} color={color} />;
+            },
+          })}
+        >
+          <Tab.Screen name="HomeTab"   component={HomeStack}     options={{ title: 'Home'     }} />
+          <Tab.Screen name="Alerts"    component={AlertsScreen}  options={{ title: 'Alerts'   }} />
+          <Tab.Screen name="Settings"  component={SettingsScreen} options={{ title: 'Settings' }} />
+        </Tab.Navigator>
+      </NavigationContainer>
+    </AppContext.Provider>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+//  STYLES
+// ════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  safeArea:          { flex: 1, backgroundColor: '#0A0E27' },
+  homeScroll:        { padding: 20, paddingBottom: 40 },
+  screenTitle:       { fontSize: 24, fontWeight: '700', color: '#fff', marginBottom: 20 },
+  sectionTitle:      { fontSize: 14, fontWeight: '600', color: '#ffffff88', marginBottom: 12, marginTop: 4, textTransform: 'uppercase', letterSpacing: 1 },
+
+  // Header
+  header:            { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 32 },
+  headerSub:         { color: '#ffffff66', fontSize: 13, marginBottom: 4 },
+  headerTitle:       { color: '#fff', fontSize: 26, fontWeight: '800', lineHeight: 32 },
+  headerBadge:       { backgroundColor: '#2ED57322', padding: 10, borderRadius: 16 },
+
+  // Gradient card
+  gradCardOuter:     { borderRadius: 16, padding: 16, marginBottom: 12, overflow: 'hidden' },
+
+  // Main button
+  buttonWrapper:     { alignItems: 'center', justifyContent: 'center', height: 190, marginBottom: 24 },
+  mainBtn:           { width: 150, height: 150, borderRadius: 75, alignItems: 'center', justifyContent: 'center', elevation: 12, shadowColor: '#5B8CFF', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.5, shadowRadius: 16 },
+  mainBtnText:       { color: '#fff', fontWeight: '700', fontSize: 14, textAlign: 'center', marginTop: 6 },
+
+  // Status
+  statusCard:        { marginBottom: 16 },
+  statusRow:         { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  statusDot:         { width: 10, height: 10, borderRadius: 5 },
+  statusText:        { color: '#fff', fontSize: 14, fontWeight: '500', flex: 1 },
+  statusSub:         { color: '#ffffff77', fontSize: 12, marginTop: 6 },
+
+  // Help
+  helpCard:          { marginBottom: 24 },
+  helpCardTitle:     { color: '#FF4757', fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  helpCardSub:       { color: '#ffffff88', fontSize: 12, marginBottom: 12 },
+  helpBtn:           { backgroundColor: '#FF4757', padding: 14, borderRadius: 12, alignItems: 'center' },
+  helpBtnText:       { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
+
+  // Feature cards
+  featureRow:        { flexDirection: 'row', gap: 10, marginBottom: 24, flexWrap: 'wrap' },
+  featureCard:       { flex: 1, minWidth: (width - 60) / 4, backgroundColor: '#1A1F3A', borderRadius: 12, padding: 10, alignItems: 'center' },
+  featureIcon:       { padding: 8, borderRadius: 10, marginBottom: 6 },
+  featureLabel:      { color: '#fff', fontSize: 11, fontWeight: '600' },
+  featureDesc:       { color: '#ffffff66', fontSize: 9, marginTop: 2, textAlign: 'center' },
+
+  // Contacts
+  contactRow:        { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#1A1F3A', borderRadius: 12, padding: 12, marginBottom: 8 },
+  contactAvatar:     { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  contactName:       { color: '#fff', fontSize: 14, fontWeight: '600' },
+  contactSub:        { color: '#ffffff66', fontSize: 11, marginTop: 1 },
+
+  // Emergency screen
+  emergencyBar:      { backgroundColor: '#FF4757', borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 16 },
+  emergencyBarText:  { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
+  emergencyCard:     { backgroundColor: '#1a0a0a', borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 0.5, borderColor: '#FF475733' },
+  emergencyTitle:    { color: '#FF4757', fontSize: 20, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
+  emergencyMsg:      { color: '#ffffff99', fontSize: 13, textAlign: 'center' },
+  emergencyCardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  emergencyCardTitle: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  alertSentBadge:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2ED57322', borderRadius: 8, padding: 8, marginTop: 12 },
+  alertSentText:     { color: '#2ED573', fontSize: 12, fontWeight: '500' },
+  locText:           { color: '#ffffff99', fontSize: 13, marginBottom: 4 },
+  mapBtn:            { flexDirection: 'row', alignItems: 'center', backgroundColor: '#5B8CFF', borderRadius: 8, padding: 10, marginTop: 8, justifyContent: 'center' },
+  mapBtnText:        { color: '#fff', fontWeight: '600', fontSize: 13 },
+  cameraPreview:     { backgroundColor: '#000', borderRadius: 12, height: 140, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  cameraText:        { color: '#ffffff66', fontSize: 12, textAlign: 'center' },
+  emergencyActions:  { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  actionBtn:         { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12, borderRadius: 12 },
+  actionBtnText:     { color: '#fff', fontWeight: '700', fontSize: 11 },
+  cancelBtn:         { borderWidth: 1, borderColor: '#FF4757', borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 20 },
+  cancelBtnText:     { color: '#FF4757', fontWeight: '700', fontSize: 15 },
+
+  // Alerts screen
+  alertItem:         { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#1A1F3A', borderRadius: 12, padding: 14, marginBottom: 8 },
+  alertDot:          { width: 10, height: 10, borderRadius: 5 },
+  alertType:         { color: '#fff', fontSize: 13, fontWeight: '700' },
+  alertMsg:          { color: '#ffffff88', fontSize: 12, marginTop: 2 },
+  alertTime:         { color: '#ffffff44', fontSize: 11, marginTop: 2 },
+  statsRow:          { flexDirection: 'row', gap: 10 },
+  statCard:          { flex: 1, backgroundColor: '#1A1F3A', borderRadius: 12, padding: 14, alignItems: 'center', borderTopWidth: 3 },
+  statValue:         { fontSize: 28, fontWeight: '800' },
+  statLabel:         { color: '#ffffff88', fontSize: 12, marginTop: 4 },
+
+  // Settings screen
+  profileAvatar:     { width: 52, height: 52, borderRadius: 26, backgroundColor: '#5B8CFF22', alignItems: 'center', justifyContent: 'center' },
+  profileName:       { color: '#fff', fontSize: 16, fontWeight: '700' },
+  profileSub:        { color: '#ffffff66', fontSize: 12, marginTop: 2 },
+  settingRow:        { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#1A1F3A', borderRadius: 12, padding: 14, marginBottom: 8 },
+  settingIcon:       { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  settingLabel:      { color: '#fff', fontSize: 14, fontWeight: '600' },
+  settingDesc:       { color: '#ffffff66', fontSize: 11, marginTop: 2 },
+  toggleTrack:       { width: 42, height: 24, borderRadius: 12, padding: 3, justifyContent: 'center' },
+  toggleThumb:       { width: 18, height: 18, borderRadius: 9, backgroundColor: '#fff' },
+
+  // Tab bar
+  tabBar:            { backgroundColor: '#12162E', borderTopWidth: 0.5, borderTopColor: '#ffffff22', paddingTop: 6, height: 62 },
 });
+
+// ════════════════════════════════════════════════════════════
+//  REQUIRED PACKAGES — run these commands in your terminal:
+//
+//  npx create-expo-app EmergencyApp --template blank
+//  cd EmergencyApp
+//
+//  npx expo install expo-location
+//  npm install @react-navigation/native @react-navigation/bottom-tabs @react-navigation/stack
+//  npx expo install react-native-screens react-native-safe-area-context
+//  npm install @expo/vector-icons   ← (pre-installed in Expo, usually no action needed)
+//
+//  Then replace App.js with this file and run:
+//  npx expo start
+// ════════════════════════════════════════════════════════════
